@@ -1,0 +1,86 @@
+services:
+  db:
+    image: postgres:15
+    container_name: ezra-lms-py-db
+    environment:
+      POSTGRES_USER: ezra_admin
+      POSTGRES_PASSWORD: ezra_admin_pass
+      POSTGRES_DB: ezra_lms
+    ports:
+      # Avoid clashing with a local PostgreSQL install on 5432
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: ezra-lms-py-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./ops/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - db
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: ezra-lms-py-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./ops/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+
+  kafka:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.1.9
+    container_name: ezra-lms-py-kafka
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - 1G
+      - --reserve-memory
+      - 0M
+      - --node-id
+      - "0"
+      - --check=false
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092
+      - --advertise-kafka-addr
+      - PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+    ports:
+      - "9092:9092"
+
+  app:
+    build: .
+    container_name: ezra-lms-py-app
+    profiles: ["app"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://ezra_admin:ezra_admin_pass@db:5432/ezra_lms
+      NOTIFICATIONS_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-change-me-in-prod-change-me-in-prod}
+    ports:
+      - "8004:8080"
+    depends_on:
+      - db
+      - kafka
+
+volumes:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
